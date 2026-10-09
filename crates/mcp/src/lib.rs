@@ -17,6 +17,7 @@
 
 mod backend;
 mod base64;
+pub mod control_client;
 mod headless;
 mod server;
 mod tools;

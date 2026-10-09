@@ -3,6 +3,8 @@
 //! ```text
 //! lightcraft-cli run [--demo | --library DIR | --connect [ADDR]] [--import PATH]… CMD [key=value…]…
 //! lightcraft-cli mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
+//!   (`run` and `mcp` also take --control-token HEX | --control-token-file PATH | --control-port-file PATH:
+//!   the app's control token, or the address and token of `lightcraft --control 0 --control-port-file PATH`)
 //! lightcraft-cli render <in> -o <out> [--set control=value]… [--settings FILE.json] [--preset ID] [--size N] [--quality Q]
 //! lightcraft-cli snapshot [--library DIR | --demo] [--script FILE.jsonl] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
 //! lightcraft-cli merge hdr|panorama|hdr-panorama [OPTIONS] FILES…
@@ -260,7 +262,23 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Split off the control-channel client flags (`--control-token`, `--control-token-file`,
+/// `--control-port-file`; see `lightcraft_mcp::control_client`).
+fn control_flags(args: &[String]) -> Result<(Vec<String>, lightcraft_mcp::control_client::ControlClientArgs), String> {
+    let mut control = lightcraft_mcp::control_client::ControlClientArgs::default();
+    let mut rest = Vec::new();
+    let mut it = args.iter().cloned();
+    while let Some(a) = it.next() {
+        if !control.take(&a, &mut it)? {
+            rest.push(a);
+        }
+    }
+    Ok((rest, control))
+}
+
 fn mcp(args: &[String]) -> Result<(), String> {
+    let (args, control) = control_flags(args)?;
+    let args = &args[..];
     let mut connect: Option<String> = None;
     let mut demo = false;
     let mut library: Option<String> = None;
@@ -289,19 +307,21 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let backend: Box<dyn Backend> = match connect {
+    // `--control-port-file`: the address (and token) of an app started with `--control 0`.
+    let (file_addr, token) = control.resolve()?;
+    let backend: Box<dyn Backend> = match connect.or(file_addr) {
         Some(addr) => {
             if !files.is_empty() || demo || library.is_some() {
                 return Err("FILES, --demo and --library apply to headless mode only (import through the `import` tool instead)".into());
             }
-            match Remote::connect(&addr) {
+            match Remote::connect_with_token(&addr, token.clone()) {
                 Ok(r) => {
                     eprintln!("lightcraft-cli mcp: connected to LightCraft at {addr}");
                     Box::new(r)
                 }
                 Err(e) => {
                     eprintln!("lightcraft-cli mcp: LightCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                    Box::new(Remote::lazy(&addr))
+                    Box::new(Remote::lazy_with_token(&addr, token))
                 }
             }
         }
@@ -478,6 +498,8 @@ fn run_step(b: &mut dyn Backend, s: &Step) -> Result<Value, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    let (args, control) = control_flags(args)?;
+    let args = &args[..];
     let mut connect: Option<String> = None;
     let mut demo = false;
     let mut library: Option<String> = None;
@@ -532,13 +554,14 @@ fn run(args: &[String]) -> Result<(), String> {
     if steps.is_empty() {
         return Err("run: no command given (see `lightcraft-cli commands`)".into());
     }
+    let (file_addr, token) = control.resolve()?;
     let mut backend: Box<dyn Backend> =
-        match connect {
+        match connect.or(file_addr) {
             Some(addr) => {
                 if demo || library.is_some() || !imports.is_empty() {
                     return Err("--demo, --library and --import apply to headless mode only".into());
                 }
-                Box::new(Remote::connect(&addr).map_err(|e| {
+                Box::new(Remote::connect_with_token(&addr, token).map_err(|e| {
                     format!("LightCraft is not reachable at {addr} ({e}); start it with `lightcraft --control {}`", connect_port(&addr))
                 })?)
             }

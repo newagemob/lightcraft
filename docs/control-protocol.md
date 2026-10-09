@@ -91,3 +91,35 @@ lightcraft-cli snapshot --library DIR --script tour.jsonl -o shot.png
   renders are in flight. Each request runs frames until it is answered and its injected input
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
   (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
+
+## Authentication and discovery
+
+The channel needs a per-launch token, with the same handshake as PhotoCraft's control port. The first
+request on every connection must be
+
+```text
+→ {"id": 0, "method": "auth", "params": {"token": "<64 hex characters>"}}
+← {"id": 0, "ok": true, "result": {"authenticated": true}}
+```
+
+Any other first request is answered `{"id": …, "ok": false, "error": "authentication required"}` and the
+connection is closed, so nothing runs on it.
+
+| Flag (environment variable) | Meaning |
+|---|---|
+| `--control <port>` (`LIGHTCRAFT_CONTROL_PORT`) | Listen on `127.0.0.1:<port>`; `0` picks a free port |
+| `--control-token <hex>` (`LIGHTCRAFT_CONTROL_TOKEN`) | Use this token (64 hex characters) instead of a fresh one |
+| `--control-token-file <path>` (`LIGHTCRAFT_CONTROL_TOKEN_FILE`) | Reuse the token in this file, or create it (owner-only) with a fresh one |
+| `--control-port-file <path>` (`LIGHTCRAFT_CONTROL_PORT_FILE`) | Once listening, write `{"port": <u16>, "token": "<hex>", "pid": <u32>}` here (owner-only) |
+| `$ORCHA_CONTROL_DIR` | Without `--control-port-file`, the port file is `$ORCHA_CONTROL_DIR/lightcraft.json` |
+| `--control-no-auth` (`LIGHTCRAFT_CONTROL_NO_AUTH=1`) | The old unauthenticated channel (explicit opt-in) |
+
+Without a token flag or a port file, the generated token is printed to standard error
+(`lightcraft: control token: …`). Clients (`lightcraft-cli`) take `--control-token`, `--control-token-file` (a
+bare token or a port file) or `--control-port-file` (address and token), or the same environment
+variables, and send `auth` on every new connection:
+
+```sh
+lightcraft --control 0 --control-port-file /tmp/lightcraft.json &
+lightcraft-cli mcp --control-port-file /tmp/lightcraft.json
+```

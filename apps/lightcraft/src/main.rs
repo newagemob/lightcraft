@@ -1,6 +1,7 @@
 //! LightCraft desktop app.
 //!
-//! Usage: `lightcraft [--library DIR | --memory] [--no-demo] [--control <port>] [files or folders…]`
+//! Usage: `lightcraft [--library DIR | --memory] [--no-demo] [--control <port>] [--control-token HEX |
+//! --control-token-file PATH] [--control-port-file PATH] [--control-no-auth] [files or folders…]`
 //!
 //! The library (catalog, presets, thumbnail cache) lives in `--library DIR`, else
 //! `$LIGHTCRAFT_LIBRARY`, else the library last opened with Settings → Open Library…, else
@@ -23,6 +24,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod control_auth;
 mod control_server;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -400,7 +402,10 @@ OPTIONS:
   --no-demo        don't seed a new library with the procedural demo photos
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
-                   see docs/control-protocol.md)
+                   0 = any free port; see docs/control-protocol.md). Clients authenticate with a per-launch
+                   token: --control-token HEX | --control-token-file PATH set it, --control-port-file PATH
+                   (or $ORCHA_CONTROL_DIR/lightcraft.json) receives {port, token, pid}, --control-no-auth
+                   keeps the old unauthenticated channel
   --version, --help
 
 ENVIRONMENT:
@@ -448,7 +453,8 @@ fn main() -> eframe::Result {
     let mut seed_demo = true;
     let mut in_memory = false;
     let mut library_dir: Option<std::path::PathBuf> = None;
-    let mut args = std::env::args().skip(1);
+    let (control_rest, control_args) = control_auth::split_or_exit(std::env::args().skip(1));
+    let mut args = control_rest.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
@@ -500,6 +506,7 @@ fn main() -> eframe::Result {
         wgpu_options: window_wgpu_options(),
         ..Default::default()
     };
+    let control = control_auth::resolve_or_exit(control_port, &control_args);
     eframe::run_native(
         "LightCraft",
         options,
@@ -530,8 +537,8 @@ fn main() -> eframe::Result {
                 app.ui.settings.gpu = false;
                 app.notices.push(notice);
             }
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+            if let Some((port, auth)) = control.clone() {
+                let rx = control_server::start(port, auth, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
             if let Some(mut p) = problem {
