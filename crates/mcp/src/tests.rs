@@ -205,3 +205,28 @@ fn resources() {
     }
     assert_eq!(rpc(&mut s, 99, "resources/read", json!({"uri": "lightcraft://nope"}))["error"]["code"], -32002);
 }
+
+#[test]
+fn listing_and_tools_carry_effect_metadata() {
+    let mut s = server();
+    let r = rpc(&mut s, 1, "tools/call", json!({"name": "list_commands", "arguments": {}}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    let v: Value = serde_json::from_str(text).unwrap();
+    let cmds = v.as_array().or_else(|| v["commands"].as_array()).unwrap();
+    let hl = Headless::demo();
+    for c in hl.session.commands() {
+        let e = cmds.iter().find(|x| x["id"] == c.id).unwrap();
+        assert_eq!(e["journal"], c.journal, "{}", c.id);
+    }
+    assert!(cmds.iter().any(|c| c["journal"] == false) && cmds.iter().any(|c| c["journal"] == true));
+    let r = rpc(&mut s, 2, "tools/list", json!({}));
+    let tools = r["result"]["tools"].as_array().unwrap();
+    let ann = |n: &str| tools.iter().find(|t| t["name"] == n).unwrap()["annotations"].clone();
+    assert_eq!(ann("list_commands"), json!({"readOnlyHint": true, "destructiveHint": false}));
+    assert_eq!(ann("run_command")["destructiveHint"], true);
+    assert_eq!(ann("import")["destructiveHint"], false);
+    // Generated command tools follow the registry's `journal` flag.
+    for c in hl.session.commands() {
+        assert_eq!(ann(&command_tool_name(c.id))["readOnlyHint"], !c.journal, "{}", c.id);
+    }
+}

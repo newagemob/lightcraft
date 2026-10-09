@@ -287,12 +287,19 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
             if let Some(s) = c["shortcut"].as_str() {
                 d.push_str(&format!(" Shortcut: {s}."));
             }
-            Some(json!({
+            let mut t = json!({
                 "name": command_tool_name(id),
                 "title": label,
                 "description": d,
                 "inputSchema": {"type": "object", "additionalProperties": true},
-            }))
+            });
+            // The registry's `journal` flag: false = a read-only query (UI commands have none).
+            match c["journal"].as_bool() {
+                Some(false) => annotate(&mut t, Some(true), Some(false)),
+                Some(true) => annotate(&mut t, Some(false), None),
+                None => {}
+            }
+            Some(t)
         })
         .collect()
 }
@@ -300,10 +307,44 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
 /// All tools: helpers, plus the generated command tools when `with_commands`.
 pub fn tool_definitions(backend: &mut dyn Backend, with_commands: bool) -> Vec<Value> {
     let mut v = helper_tools(backend.has_ui());
+    for t in &mut v {
+        let (read_only, destructive) = helper_hints(t["name"].as_str().unwrap_or(""));
+        annotate(t, read_only, destructive);
+    }
     if with_commands {
         v.extend(command_tools(backend));
     }
     v
+}
+
+/// Add MCP `annotations` (`readOnlyHint`, `destructiveHint`) that are known.
+fn annotate(t: &mut Value, read_only: Option<bool>, destructive: Option<bool>) {
+    let mut a = serde_json::Map::new();
+    if let Some(r) = read_only {
+        a.insert("readOnlyHint".into(), json!(r));
+    }
+    if let Some(d) = destructive {
+        a.insert("destructiveHint".into(), json!(d));
+    }
+    if !a.is_empty() {
+        t["annotations"] = Value::Object(a);
+    }
+}
+
+/// `(readOnlyHint, destructiveHint)` of the helper tools where known. Read-only tools never
+/// destroy; tools that change existing photos or write files (any command, develop settings,
+/// presets, crop, export) are destructive; import and selection only add or select. Raw UI input
+/// depends on what it drives: no destructive hint.
+fn helper_hints(name: &str) -> (Option<bool>, Option<bool>) {
+    match name {
+        "list_commands" | "query_photos" | "list_controls" | "get_develop" | "render_photo" | "screenshot" | "inspect_ui" | "list_widgets" => {
+            (Some(true), Some(false))
+        }
+        "run_command" | "set_develop" | "apply_preset" | "crop" | "export" => (Some(false), Some(true)),
+        "import" | "select_photos" | "set_ui" => (Some(false), Some(false)),
+        "click" | "press_key" | "type_text" | "pointer_gesture" => (Some(false), None),
+        _ => (None, None),
+    }
 }
 
 fn exec(b: &mut dyn Backend, command: &str, params: Value) -> Result<Value, String> {

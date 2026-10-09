@@ -62,6 +62,8 @@ pub struct CommandInfo {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+    /// Recorded in the journal; `false` marks a read-only query.
+    pub journal: bool,
 }
 
 impl CommandSpec {
@@ -75,6 +77,7 @@ impl CommandSpec {
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
+            journal: self.journal,
         }
     }
 }
